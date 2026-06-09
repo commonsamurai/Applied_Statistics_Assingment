@@ -1,3 +1,4 @@
+
 # Coursework MA321-7-SU: Team Project Task - R Code to Get Started
 # Version:May 2026
 rm(list=ls())
@@ -57,7 +58,7 @@ teamsubsets <- read.table('teamsubsets.csv')
 # Specify the number of your team to identify your teams's subset of variables.
 # Replace 50 by the number of your team.
 
-your_team <- 50
+your_team <- 5
 
 my_team_subset <- teamsubsets[your_team,]
 str(my_team_subset)
@@ -102,18 +103,175 @@ dimnames(MyTeam_DataSet)[[2]]
 
 MyTeam_DataSet[1:5,1:6]
 
-# For example with team number 50 you get
-# > MyTeam_DataSet[1:5,1:6]
-#   Class X98260 Contig26706_RC NM_002923 AL137736 NM_006086
-# 1     2  0.114         -0.181    -0.079   -0.099    -0.709
-# 2     2  0.015         -0.131     0.143   -0.067    -0.646
-# 3     2 -0.439         -0.103     0.020    0.319    -0.052
-# 4     2  0.263          0.128    -0.267   -0.357     0.578
-# 5     2  0.215          0.139    -0.188   -0.329    -0.493
 
-# All analysis of your group has to use the data set MyTeam_DataSet
-# defined by the 500 variables identified by your team number
-# 
-# Avoid plagiarism by choosing for your team variable and object names,
-# and by using comments to explain each line of code in your team's words
-# 
+
+# -----------------------------------------------------------------------------------------
+  # Convert outcome to factor with readable labels
+  # Assignment definition:
+  # class == 2 means invasive cancer
+  # class == 1 means non-invasive cancer
+  MyTeam_DataSet$Class <- factor(MyTeam_DataSet$Class,
+                                 levels = c(1, 2),
+                                 labels = c("non_invasive", "invasive"))
+
+
+# --------------------------------------------------------------
+ # Varun -  Question 1 and some  Q2 :()
+
+
+
+
+# -----------------------------
+# Q1. Initial data checking / exploratory analysis
+# -----------------------------
+
+cat("Dataset dimensions:\n")
+print(dim(MyTeam_DataSet))
+
+cat("\nClass distribution:\n")
+print(table(MyTeam_DataSet$Class))
+#using the below code to identify proportions
+print(prop.table(table(MyTeam_DataSet$Class)))
+
+#checking for missing values since it could cause errors going further
+cat("\nNumber of missing values:\n")
+print(sum(is.na(MyTeam_DataSet)))
+
+cat("\nSummary of first five selected genes:\n")
+print(summary(MyTeam_DataSet[, 2:6]))
+
+# Boxplot for the first six genes by class
+first_six_genes <- names(MyTeam_DataSet)[2:7]
+
+# reshaping data into longer format for plotting
+boxplot_data <- stack(MyTeam_DataSet[, first_six_genes])
+boxplot_data$Class <- rep(MyTeam_DataSet$Class, times = length(first_six_genes))
+
+qplot(x = ind, y = values, fill = Class, data = boxplot_data,
+      geom = "boxplot") +
+  labs(title = "Expression distributions for first six team genes",
+       x = "Gene",
+       y = "Expression value") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# PCA plot using all 500 team genes
+gene_matrix <- scale(MyTeam_DataSet[, -1])  # removing class column
+
+pca_fit <- prcomp(gene_matrix, center = TRUE, scale. = TRUE)
+
+pca_data <- data.frame(
+  PC1 = pca_fit$x[, 1],
+  PC2 = pca_fit$x[, 2],
+  Class = MyTeam_DataSet$Class
+)
+
+var_explained <- round(100 * summary(pca_fit)$importance[2, 1:2], 2)
+
+ggplot(pca_data, aes(x = PC1, y = PC2, colour = Class)) +
+  geom_point(size = 3) +
+  labs(title = "PCA plot of team gene-expression data",
+       x = paste0("PC1 (", var_explained[1], "% variance)"),
+       y = paste0("PC2 (", var_explained[2], "% variance)"))
+
+
+# -----------------------------
+# 2. Train/test split for supervised learning
+# -----------------------------
+install.packages("caret")
+library(caret)
+
+train_index <- createDataPartition(MyTeam_DataSet$Class,
+                                   p = 0.70,
+                                   list = FALSE)  # split 70/30
+# and used createdatapartition to maintain class distribution
+
+train_data <- MyTeam_DataSet[train_index, ]
+test_data  <- MyTeam_DataSet[-train_index, ]
+
+cat("\nTraining class distribution:\n")
+print(table(train_data$Class))
+
+cat("\nTest class distribution:\n")
+print(table(test_data$Class))
+
+# -----------------------------
+# 3. Feature selection using training data only
+# -----------------------------
+# Reason:
+# There are 500 genes but only 78 patients.
+# LDA/QDA can become unstable with too many predictors.
+# So we select the top genes using only the training data.
+
+t_test_pvalue <- function(gene_values, class_values) {
+  out <- t.test(gene_values ~ class_values)
+  return(out$p.value)
+}
+
+p_values <- sapply(train_data[, -1],
+                   t_test_pvalue,
+                   class_values = train_data$Class)
+
+p_values <- sort(p_values)
+
+# Top 15 selected genes
+# This keeps the number of predictors small enough for QDA.
+top_k <- 15
+selected_genes <- names(p_values)[1:top_k]
+
+cat("\nSelected genes used for LDA/QDA/SVM/RF:\n")
+print(selected_genes)
+
+train_selected <- train_data[, c("Class", selected_genes)]
+test_selected  <- test_data[, c("Class", selected_genes)]
+# -----------------------------
+# 4. Pre-processing
+# -----------------------------
+# LDA/QDA and SVM are sensitive to scale.
+# Scaling is fitted on training data only, then applied to test data.
+
+# calculating mean and SD of each gene
+preprocess_fit <- preProcess(train_selected[, -1],
+                             method = c("center", "scale"))
+
+train_scaled_x <- predict(preprocess_fit, train_selected[, -1])
+test_scaled_x  <- predict(preprocess_fit, test_selected[, -1])
+
+train_scaled <- data.frame(Class = train_selected$Class, train_scaled_x)
+test_scaled  <- data.frame(Class = test_selected$Class, test_scaled_x)
+
+# Make invasive the positive class
+train_scaled$Class <- relevel(train_scaled$Class, ref = "invasive")
+test_scaled$Class  <- relevel(test_scaled$Class, ref = "invasive")
+
+# Cross-validation setup
+# controlling hyperparamenters for RF and SVM, im doing repeated 
+# cross-validation with 5 folds, repeating 10 times because the dataset is TINY
+cv_ctrl <- trainControl(method = "repeatedcv",
+                        number = 5,
+                        repeats = 10,
+                        classProbs = TRUE,
+                        summaryFunction = twoClassSummary,
+                        savePredictions = "final")
+# -----------------------------
+# Helper function for model evaluation
+# -----------------------------
+
+evaluate_model <- function(model_name, predicted_class, predicted_prob, actual_class) {
+  
+  cm <- confusionMatrix(predicted_class,
+                        actual_class,
+                        positive = "invasive")
+  
+  auc_value <- auc(response = actual_class,
+                   predictor = predicted_prob,
+                   levels = c("non_invasive", "invasive"),
+                   direction = "<")
+  
+  data.frame(Model = model_name,
+             Accuracy = as.numeric(cm$overall["Accuracy"]),
+             Sensitivity = as.numeric(cm$byClass["Sensitivity"]),
+             Specificity = as.numeric(cm$byClass["Specificity"]),
+             AUC = as.numeric(auc_value))
+}
+
+results <- data.frame()
